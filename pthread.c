@@ -49,7 +49,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
   crt_threads.tail->routine = 
     crt_create((crt_func_t)start_routine, arg, FLEXSC_STACK_SIZE);
 
-  log(info, "Created user-level thread %ld (%lx)", *thread, crt_threads.tail->routine);
+  info("Created user-level thread %ld (%lx)", *thread, crt_threads.tail->routine);
 
   /* 
    * Switch to it.
@@ -74,7 +74,7 @@ int pthread_join(pthread_t thread, void **retval)
   /* 
    * Call crt's interface to wait until this thread exits.
    */
-  log(info, "Waiting for thread %ld (%lx) to terminate...", thread, t->routine);
+  info("Waiting for thread %ld (%lx) to terminate...", thread, t->routine);
   crt_wait(t->routine);
 
   /* 

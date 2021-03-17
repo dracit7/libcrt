@@ -112,7 +112,7 @@ static crt_t* crt_schedule() {
 }
 
 crt_t* crt_create(crt_func_t func, void* arg, size_t stack_sz) {
-  log(call, "crt_create");
+  debug("crt_create");
 
   /* 
    * Allocate and initialize a coroutine.
@@ -157,7 +157,7 @@ void crt_free(crt_t* crt) {
  * 1 elsewise.
  */
 int crt_yield(void) {
-  log(call, "crt_yield from %lx", cur_crt);
+  debug("crt_yield from %lx", cur_crt);
 
   crt_t* old_cur_crt = cur_crt;
 
@@ -205,7 +205,7 @@ int crt_yield(void) {
  * 0 if the main coroutine is waiting on some non-main coroutines.
  */
 int crt_yield_to_main(void) {
-  log(call, "crt_yield_to_main (main %s)", main_waiting ? "waiting" : "available");
+  debug("crt_yield_to_main (main %s)", main_waiting ? "waiting" : "available");
 
   if (!cur_crt) fault("can not yield to main when already in main!");
 
@@ -223,7 +223,7 @@ int crt_yield_to_main(void) {
  * coroutine exits.
  */
 void crt_wait(crt_t* crt) {
-  log(call, "crt_wait %lx", crt);
+  debug("crt_wait %lx", crt);
 
   if (cur_crt) fault("only the main routine can wait for a non-main routine!");
   
@@ -236,7 +236,7 @@ void crt_wait(crt_t* crt) {
  * Wake a yielding coroutine up and switch to it.
  */
 void crt_wakeup(crt_t* crt) {
-  log(call, "crt_wakeup %lx", crt);
+  debug("crt_wakeup %lx", crt);
 
   crt_ready(cur_crt);
   crt_switch(cur_crt, crt);
