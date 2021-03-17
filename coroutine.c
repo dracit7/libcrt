@@ -6,30 +6,36 @@
  * 
  * 1. Non-main coroutines would not switch to another yielding non-main
  *  coroutine. The main coroutine could switch to any coroutine.
- * 
- * 2. Only the main coroutine would return from swapcontext(). Non-main
- *  coroutines either yield to another coroutine initiatively or exit.
  */
 
-static struct {
-  crt_t* head;
-  crt_t* tail;
-  int ncrt;
-} rqueue; /* The run queue. */
+crt_list_t rqueue; /* The run queue. */
 
 static crt_t main_crt; /* The main coroutine. */
 static crt_t* cur_crt; /* The running coroutine. */
 
 static char  main_waiting;
 
+#define crt_append_to_list(crt, list) do {\
+  if (!(list)->head) (list)->head = (list)->tail = crt;\
+  else (list)->tail = (list)->tail->next = crt;\
+  (crt)->next = 0;\
+  (list)->cnt++;\
+} while (0)
+
+#define crt_drop_list_head(list) ({\
+  crt_t* _orig_head = (list)->head;\
+  (list)->head = (list)->head->next;\
+  (list)->cnt--;\
+  _orig_head;\
+})
+
 /* 
- * Append a coroutine @crt to the run queue.
+ * Append a coroutine @crt to the run queue and set
+ * its state to CRT_READY.
  */
 static void crt_ready(crt_t* crt) {
-  if (!rqueue.head) rqueue.head = rqueue.tail = crt;
-  else rqueue.tail = rqueue.tail->next = crt;
-  crt->next = 0;
-  rqueue.ncrt++;
+  crt_append_to_list(crt, &rqueue);
+  crt->state = CRT_READY;
 }
 
 /* 
@@ -49,7 +55,7 @@ static void crt_switch(crt_t* from, crt_t* to) {
 }
 
 /* 
- * Find the first coroutine that is not yielding and run it.
+ * Find the first coroutine that is ready and run it.
  * If there'is no such coroutine, return NULL.
  */
 static crt_t* crt_schedule() {
@@ -60,24 +66,19 @@ static crt_t* crt_schedule() {
    * it can yield to some non-main coroutines that's yielding.
    */
   if (cur_crt == &main_crt) {
-    crt_t* to = rqueue.head;
-    rqueue.head = rqueue.head->next;
-    rqueue.ncrt--;
+    crt_t* to = crt_drop_list_head(&rqueue);
 
     crt_switch(cur_crt, to);
     return to;
   }
 
   /* 
-   * If the head is not yielding, switch to it directly.
+   * If the head is ready, switch to it directly.
    */
-  if (rqueue.head->state != CRT_YIELD) {
-    
-    crt_t* to = rqueue.head;
-    rqueue.head = rqueue.head->next;
-    rqueue.ncrt--;
+  if (rqueue.head->state == CRT_READY) {
+    crt_t* to = crt_drop_list_head(&rqueue);
+    crt_append_to_list(cur_crt, &rqueue);
 
-    crt_ready(cur_crt);
     crt_switch(cur_crt, to);
     return to;
   }
@@ -87,7 +88,7 @@ static crt_t* crt_schedule() {
    */
   crt_t* crt;
   for (crt = rqueue.head; crt->next; crt = crt->next)
-    if (crt->next->state != CRT_YIELD) break;
+    if (crt->next->state == CRT_READY) break;
   
   /* 
    * If can not find a not yielding coroutine, just return.
@@ -99,12 +100,12 @@ static crt_t* crt_schedule() {
    */
   crt_t* to = crt->next;
   crt->next = crt->next->next;
-  rqueue.ncrt--;
+  rqueue.cnt--;
 
   /* 
    * Append the current coroutine to queue.
    */
-  crt_ready(cur_crt);
+  crt_append_to_list(cur_crt, &rqueue);
 
   crt_switch(cur_crt, to);
   return to;
@@ -210,10 +211,10 @@ int crt_yield_to_main(void) {
 
   if (main_waiting) return 0;
 
-  crt_ready(cur_crt);
   cur_crt->state = CRT_YIELD;
-  crt_switch(cur_crt, &main_crt);
+  crt_append_to_list(cur_crt, &rqueue);
 
+  crt_switch(cur_crt, &main_crt);
   return 1;
 }
 
@@ -238,7 +239,6 @@ void crt_wakeup(crt_t* crt) {
   log(call, "crt_wakeup %lx", crt);
 
   crt_ready(cur_crt);
-  cur_crt->state = CRT_YIELD;
   crt_switch(cur_crt, crt);
 }
 
@@ -247,4 +247,50 @@ void crt_wakeup(crt_t* crt) {
  */
 crt_t* crt_getcur() {
   return cur_crt;
+}
+
+/* 
+ * Create a new coroutine lock.
+ */
+crt_lock_t* crt_lock_new() {
+  crt_lock_t* lock = malloc(sizeof(crt_lock_t));
+
+  lock->owner = NULL;
+  lock->wait_list.head = lock->wait_list.tail = NULL;
+  lock->wait_list.cnt = 0;
+  return lock;
+}
+
+/* 
+ * Try to hold the lock. If the lock is holding by someone else,
+ * join the waitlist and hand over the control until the lock is
+ * released.
+ * 
+ * The state of a coroutine would be CRT_LOCKED IF and ONLY IF it's
+ * in a lock's wait list.
+ */
+void crt_lock(crt_lock_t* lock) {
+  if (!lock->owner) {
+    lock->owner = cur_crt;
+    return;
+  }
+
+  crt_append_to_list(cur_crt, &lock->wait_list);
+  cur_crt->state = CRT_LOCKED;
+
+  crt_schedule();
+}
+
+/* 
+ * Release the lock and set the first coroutine in the wait list as
+ * the owner.
+ */
+void crt_unlock(crt_lock_t* lock) {
+  if (!lock->owner) fault("can not release a lock that is not held by anyone!");
+
+  if (lock->wait_list.head) {
+    crt_t* crt = crt_drop_list_head(&lock->wait_list);
+    lock->owner = crt;
+    crt_ready(crt);
+  }
 }

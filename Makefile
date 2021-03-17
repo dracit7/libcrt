@@ -10,7 +10,7 @@ LIBPCRT_HEADERS = \
 	coroutine.h \
 
 $(LIBPCRT_SO): $(LIBPCRT_SRC) $(LIBPCRT_HEADERS)
-	gcc -fPIC -shared -I. -ldl -o $(LIBPCRT_SO) $^
+	gcc -fPIC -shared -I. -ldl -g -o $(LIBPCRT_SO) $^
 
 all: $(LIBPCRT_SO)
 

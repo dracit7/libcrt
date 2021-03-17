@@ -10,9 +10,11 @@ typedef void (*crt_func_t) (void);
 
 enum crt_state {
   CRT_RUNNING = 0, // The coroutine is running
-  CRT_YIELD,   // The coroutine has nothing to do now
-  CRT_STOPPED, // The coroutine is not running
-  CRT_EXITED,  // The coroutine has exited
+  CRT_READY,       // The coroutine is not running but ready to run
+  CRT_YIELD,       // The coroutine has nothing to do now
+  CRT_STOPPED,     // The coroutine is not running
+  CRT_LOCKED,      // The coroutine is trying to hold a lock
+  CRT_EXITED,      // The coroutine has exited
 };
 
 typedef struct coroutine {
@@ -24,6 +26,17 @@ typedef struct coroutine {
   size_t stack_sz;
   int state;
 } crt_t;
+
+typedef struct {
+  crt_t* head;
+  crt_t* tail;
+  size_t cnt;
+} crt_list_t;
+
+typedef struct {
+  crt_t* owner;
+  crt_list_t wait_list;
+} crt_lock_t;
 
 crt_t* crt_create(crt_func_t func, void* arg, size_t stack_sz);
 void crt_free(crt_t* crt);
