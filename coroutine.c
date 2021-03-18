@@ -49,6 +49,7 @@ static void crt_switch(crt_t* from, crt_t* to) {
     cur_crt->state = CRT_RUNNING;
   }
 
+  debug("switching from %lx to %lx", from, to);
   swapcontext(&from->context, &to->context);
 
   from->state = CRT_RUNNING;
@@ -60,6 +61,7 @@ static void crt_switch(crt_t* from, crt_t* to) {
  */
 static crt_t* crt_schedule() {
   if (!rqueue.head) return NULL;
+  debug("scheduling, %d tasks in the run queue", rqueue.cnt);
 
   /* 
    * The main coroutine should be handled seperately because
@@ -281,14 +283,14 @@ int crt_lock(crt_lock_t* lock, int block) {
   }
 
   if (!block) return 0;
-  debug("failed (lock is held by %lx)", lock->owner);
+  debug("%lx failed (lock is held by %lx)", cur_crt, lock->owner);
 
-  if (!cur_crt) {
+  if (cur_crt) {
     crt_append_to_list(cur_crt, &lock->wait_list);
     cur_crt->state = CRT_LOCKED;
-    crt_yield_to_main();
+    crt_switch(cur_crt, &main_crt);
 
-  } else crt_wakeup(lock->owner);
+  } else crt_switch(cur_crt, lock->owner);
 
   return 1;
 }
@@ -305,7 +307,9 @@ int crt_unlock(crt_lock_t* lock) {
     crt_t* crt = crt_drop_list_head(&lock->wait_list);
     lock->owner = crt;
     crt_ready(crt);
-  }
+
+    debug("coroutine %lx got the lock", crt);
+  } else lock->owner = NULL;
 
   return 0;
 }
