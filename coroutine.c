@@ -13,7 +13,7 @@ crt_list_t rqueue; /* The run queue. */
 static crt_t main_crt; /* The main coroutine. */
 static crt_t* cur_crt; /* The running coroutine. */
 
-static char  main_waiting;
+static char  main_waiting; /* Is the main coroutine waiting? */
 
 #define crt_append_to_list(crt, list) do {\
   if (!(list)->head) (list)->head = (list)->tail = crt;\
@@ -250,47 +250,57 @@ crt_t* crt_getcur() {
 }
 
 /* 
- * Create a new coroutine lock.
+ * Initialize a new coroutine lock.
+ * 
+ * Some applications leverage different implementations of malloc()
+ * that calls pthread_mutex_*(), which would cause infinite recursion
+ * if we use malloc() in crt_lock_*().
  */
-crt_lock_t* crt_lock_new() {
-  crt_lock_t* lock = malloc(sizeof(crt_lock_t));
-
+void crt_lock_init(crt_lock_t* lock) {
   lock->owner = NULL;
   lock->wait_list.head = lock->wait_list.tail = NULL;
   lock->wait_list.cnt = 0;
-  return lock;
 }
 
 /* 
  * Try to hold the lock. If the lock is holding by someone else,
  * join the waitlist and hand over the control until the lock is
- * released.
+ * released if @block is true, return 0 elsewise.
  * 
  * The state of a coroutine would be CRT_LOCKED IF and ONLY IF it's
  * in a lock's wait list.
  */
-void crt_lock(crt_lock_t* lock) {
+int crt_lock(crt_lock_t* lock, int block) {
   if (!lock->owner) {
     lock->owner = cur_crt;
-    return;
+    return 1;
   }
+
+  if (!block) return 0;
 
   crt_append_to_list(cur_crt, &lock->wait_list);
   cur_crt->state = CRT_LOCKED;
 
   crt_schedule();
+  return 1;
 }
 
 /* 
  * Release the lock and set the first coroutine in the wait list as
  * the owner.
  */
-void crt_unlock(crt_lock_t* lock) {
-  if (!lock->owner) fault("can not release a lock that is not held by anyone!");
+int crt_unlock(crt_lock_t* lock) {
+  if (!lock->owner) return -EINVAL;
 
   if (lock->wait_list.head) {
     crt_t* crt = crt_drop_list_head(&lock->wait_list);
     lock->owner = crt;
     crt_ready(crt);
   }
+
+  return 0;
+}
+
+void crt_lock_free(crt_lock_t* lock) {
+  free(lock);
 }

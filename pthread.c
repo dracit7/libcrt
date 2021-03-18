@@ -4,15 +4,12 @@
 #include <dlfcn.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <signal.h>
 
 #include "coroutine.h"
 
-#define  FLEXSC_STACK_SIZE   4096
-#define  FLEXSC_MAX_THREADS  4096
-
-static int (*orig_pthread_create) (pthread_t *thread, const pthread_attr_t *attr,
-  void *(*start_routine) (void *), void *arg);
-static int (*orig_pthread_join) (pthread_t thread, void **retval);
+#define  CRT_STACK_SIZE      4096
+#define  CRT_MAX_MUTEX_NUM   128
 
 typedef struct crt_thread {
   pthread_t id;
@@ -26,10 +23,10 @@ static struct {
   int id_space;
 } crt_threads;
 
-#define FREE_CRT_THREAD(thread) do {\
-  crt_free((thread)->routine);\
-  free(thread);\
-} while (0)
+static struct {
+  char valid;
+  crt_lock_t lock;
+} crt_mutexes[CRT_MAX_MUTEX_NUM];
 
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine) (void *), void *arg)
 {
@@ -47,7 +44,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
   *thread = crt_threads.tail->id = ++crt_threads.id_space;
   crt_threads.tail->next = 0;
   crt_threads.tail->routine = 
-    crt_create((crt_func_t)start_routine, arg, FLEXSC_STACK_SIZE);
+    crt_create((crt_func_t)start_routine, arg, CRT_STACK_SIZE);
 
   info("Created user-level thread %ld (%lx)", *thread, crt_threads.tail->routine);
 
@@ -87,7 +84,61 @@ int pthread_join(pthread_t thread, void **retval)
     th->next = t->next;
   }
 
-  FREE_CRT_THREAD(t);
+  crt_free(t->routine);
+  free(t);
   
   return 0;
+}
+
+static inline int crt_mutex_init(long* id) {
+  if (!(*id)) {
+    for (int i = 1; i < CRT_MAX_MUTEX_NUM; i++) 
+      if (!crt_mutexes[i].valid) {
+        crt_lock_init(&crt_mutexes[i].lock);
+        crt_mutexes[i].valid = 1;
+        *id = i;
+      }
+
+    if (!(*id)) return -EAGAIN;
+  }
+
+  return 0;
+}
+
+int pthread_mutex_lock(pthread_mutex_t *mutex) {
+
+  /* 
+   * If the mutex is not initialized, initialize it.
+   * 
+   * The initialization can not be done by overriding pthread_mutex_init()
+   * because of PTHREAD_MUTEX_INITIALIZER.
+   */
+  int ret = crt_mutex_init(&mutex->__align);
+  if (!ret) return ret;
+
+  crt_lock(&crt_mutexes[mutex->__align].lock, 1);
+  return 0;
+}
+
+int pthread_mutex_trylock(pthread_mutex_t *mutex) {
+  int ret = crt_mutex_init(&mutex->__align);
+  if (!ret) return ret;
+
+  if (crt_lock(&crt_mutexes[mutex->__align].lock, 0)) return 0;
+  else return -EBUSY;
+}
+
+int pthread_mutex_unlock(pthread_mutex_t* mutex) {
+  if (!crt_mutexes[mutex->__align].valid) return -EINVAL;
+  return crt_unlock(&crt_mutexes[mutex->__align].lock);
+}
+
+int pthread_mutex_destroy(pthread_mutex_t *mutex) {
+  crt_mutexes[mutex->__align].valid = 0;
+  crt_lock_free(&crt_mutexes[mutex->__align].lock);
+  return 0;
+}
+
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset) {
+  return sigprocmask(how, set, oldset);
 }

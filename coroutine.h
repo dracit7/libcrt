@@ -45,5 +45,9 @@ int crt_yield_to_main(void);
 void crt_wait(crt_t* crt);
 void crt_wakeup(crt_t* crt);
 crt_t* crt_getcur();
+void crt_lock_init(crt_lock_t* lock);
+int crt_lock(crt_lock_t* lock, int block);
+int crt_unlock(crt_lock_t* lock);
+void crt_lock_free(crt_lock_t* lock);
 
 #endif
