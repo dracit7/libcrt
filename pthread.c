@@ -10,6 +10,7 @@
 
 #define  CRT_STACK_SIZE      4096
 #define  CRT_MAX_MUTEX_NUM   128
+#define  CRT_MAX_COND_NUM    128
 
 typedef struct crt_thread {
   pthread_t id;
@@ -27,6 +28,26 @@ static struct {
   char valid;
   crt_lock_t lock;
 } crt_mutexes[CRT_MAX_MUTEX_NUM];
+
+static struct {
+  char valid;
+  crt_cond_t cond;
+} crt_conds[CRT_MAX_COND_NUM];
+
+#define CRT_VAR_INIT(id, arr, size, obj) ({\
+  int ret = 0;\
+  if (!(*(id))) {\
+    for (int i = 1; i < size; i++) \
+      if (!arr[i].valid) {\
+        crt_##obj##_init(&arr[i].obj);\
+        arr[i].valid = 1;\
+        *(id) = i;\
+        break;\
+      }\
+    if (!(*(id))) ret = -EAGAIN;\
+  }\
+  (ret);\
+})
 
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine) (void *), void *arg)
 {
@@ -90,21 +111,6 @@ int pthread_join(pthread_t thread, void **retval)
   return 0;
 }
 
-static inline int crt_mutex_init(long* id) {
-  if (!(*id)) {
-    for (int i = 1; i < CRT_MAX_MUTEX_NUM; i++) 
-      if (!crt_mutexes[i].valid) {
-        crt_lock_init(&crt_mutexes[i].lock);
-        crt_mutexes[i].valid = 1;
-        *id = i;
-      }
-
-    if (!(*id)) return -EAGAIN;
-  }
-
-  return 0;
-}
-
 int pthread_mutex_lock(pthread_mutex_t *mutex) {
 
   /* 
@@ -113,16 +119,16 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
    * The initialization can not be done by overriding pthread_mutex_init()
    * because of PTHREAD_MUTEX_INITIALIZER.
    */
-  int ret = crt_mutex_init(&mutex->__align);
-  if (!ret) return ret;
+  int ret = CRT_VAR_INIT(&mutex->__align, crt_mutexes, CRT_MAX_MUTEX_NUM, lock);
+  if (ret) return ret;
 
   crt_lock(&crt_mutexes[mutex->__align].lock, 1);
   return 0;
 }
 
 int pthread_mutex_trylock(pthread_mutex_t *mutex) {
-  int ret = crt_mutex_init(&mutex->__align);
-  if (!ret) return ret;
+  int ret = CRT_VAR_INIT(&mutex->__align, crt_mutexes, CRT_MAX_MUTEX_NUM, lock);
+  if (ret) return ret;
 
   if (crt_lock(&crt_mutexes[mutex->__align].lock, 0)) return 0;
   else return -EBUSY;
@@ -135,10 +141,37 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
 
 int pthread_mutex_destroy(pthread_mutex_t *mutex) {
   crt_mutexes[mutex->__align].valid = 0;
-  crt_lock_free(&crt_mutexes[mutex->__align].lock);
   return 0;
 }
 
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset) {
   return sigprocmask(how, set, oldset);
+}
+
+int pthread_cond_wait(pthread_cond_t *restrict cond, pthread_mutex_t *restrict mutex) {
+  if (!crt_mutexes[mutex->__align].valid) return -EINVAL;
+
+  int ret = CRT_VAR_INIT(&cond->__align, crt_conds, CRT_MAX_COND_NUM, cond);
+  if (ret) return ret;
+
+  return crt_cond_wait(&crt_conds[cond->__align].cond, &crt_mutexes[mutex->__align].lock);
+}
+
+int pthread_cond_signal(pthread_cond_t *cond) {
+  int ret = CRT_VAR_INIT(&cond->__align, crt_conds, CRT_MAX_COND_NUM, cond);
+  if (ret) return ret;
+  
+  return crt_cond_signal(&crt_conds[cond->__align].cond);
+}
+
+int pthread_cond_broadcast(pthread_cond_t *cond) {
+  int ret = CRT_VAR_INIT(&cond->__align, crt_conds, CRT_MAX_COND_NUM, cond);
+  if (ret) return ret;
+  
+  return crt_cond_broadcast(&crt_conds[cond->__align].cond);
+}
+
+int pthread_cond_destroy(pthread_cond_t *cond) {
+  crt_conds[cond->__align].valid = 0;
+  return 0;
 }

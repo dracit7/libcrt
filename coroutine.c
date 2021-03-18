@@ -271,17 +271,25 @@ void crt_lock_init(crt_lock_t* lock) {
  * in a lock's wait list.
  */
 int crt_lock(crt_lock_t* lock, int block) {
+  if (block) debug("crt_lock %lx", lock);
+  else debug("crt_trylock %lx", lock);
+
   if (!lock->owner) {
-    lock->owner = cur_crt;
+    debug("acquired by %lx", cur_crt);
+    lock->owner = cur_crt ? cur_crt : &main_crt;
     return 1;
   }
 
   if (!block) return 0;
+  debug("failed (lock is held by %lx)", lock->owner);
 
-  crt_append_to_list(cur_crt, &lock->wait_list);
-  cur_crt->state = CRT_LOCKED;
+  if (!cur_crt) {
+    crt_append_to_list(cur_crt, &lock->wait_list);
+    cur_crt->state = CRT_LOCKED;
+    crt_yield_to_main();
 
-  crt_schedule();
+  } else crt_wakeup(lock->owner);
+
   return 1;
 }
 
@@ -290,6 +298,7 @@ int crt_lock(crt_lock_t* lock, int block) {
  * the owner.
  */
 int crt_unlock(crt_lock_t* lock) {
+  debug("crt_unlock %lx", lock);
   if (!lock->owner) return -EINVAL;
 
   if (lock->wait_list.head) {
@@ -301,6 +310,42 @@ int crt_unlock(crt_lock_t* lock) {
   return 0;
 }
 
-void crt_lock_free(crt_lock_t* lock) {
-  free(lock);
+/* 
+ * Initialize a new coroutine condition variable.
+ */
+void crt_cond_init(crt_cond_t* cond) {
+  cond->wait_list.head = cond->wait_list.tail = NULL;
+  cond->wait_list.cnt = 0;
+}
+
+int crt_cond_wait(crt_cond_t* cond, crt_lock_t* lock) {
+  debug("crt_cond_wait on %lx", cond);
+  if (lock->owner != cur_crt) return -EINVAL;
+
+  crt_append_to_list(cur_crt, &cond->wait_list);
+  cur_crt->state = CRT_LOCKED;
+
+  crt_unlock(lock);
+  crt_schedule();
+  crt_lock(lock, 0);
+
+  return 0;
+}
+
+int crt_cond_signal(crt_cond_t* cond) {
+  debug("crt_cond_signal on %lx", cond);
+  crt_t* crt = crt_drop_list_head(&cond->wait_list);
+  crt_ready(crt);
+
+  return 0;
+}
+
+int crt_cond_broadcast(crt_cond_t* cond) {
+  debug("crt_cond_broadcast on %lx", cond);
+  for (int i = 0; i < cond->wait_list.cnt; i++) {
+    crt_t* crt = crt_drop_list_head(&cond->wait_list);
+    crt_ready(crt);
+  }
+
+  return 0;
 }

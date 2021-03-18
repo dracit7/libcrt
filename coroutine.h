@@ -38,6 +38,10 @@ typedef struct {
   crt_list_t wait_list;
 } crt_lock_t;
 
+typedef struct {
+  crt_list_t wait_list;
+} crt_cond_t;
+
 crt_t* crt_create(crt_func_t func, void* arg, size_t stack_sz);
 void crt_free(crt_t* crt);
 int crt_yield(void);
@@ -48,6 +52,9 @@ crt_t* crt_getcur();
 void crt_lock_init(crt_lock_t* lock);
 int crt_lock(crt_lock_t* lock, int block);
 int crt_unlock(crt_lock_t* lock);
-void crt_lock_free(crt_lock_t* lock);
+void crt_cond_init(crt_cond_t* cond);
+int crt_cond_wait(crt_cond_t* cond, crt_lock_t* lock);
+int crt_cond_signal(crt_cond_t* cond);
+int crt_cond_broadcast(crt_cond_t* cond);
 
 #endif

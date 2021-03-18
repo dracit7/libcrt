@@ -35,6 +35,6 @@
 #define debug(msg, ...) log(cBLU "[debug]" cRST, cGRA msg cRST, ##__VA_ARGS__)
 #define info(msg, ...) log(cLGN "[info]" cRST, msg, ##__VA_ARGS__)
 
-#define fault(msg, ...) do { printf("Error: " msg "\n", ##__VA_ARGS__); exit(EXIT_FAILURE); } while (0)
+#define fault(msg, ...) do { printf(cLRD "[Error] " cRST msg "\n", ##__VA_ARGS__); exit(EXIT_FAILURE); } while (0)
 
 #endif
